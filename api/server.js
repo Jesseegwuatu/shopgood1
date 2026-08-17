@@ -1,8 +1,7 @@
-// api/server.js - Fixed for Vercel (using REST API + Firebase Auth Admin)
+// api/server.js - SIMPLIFIED VERSION for Vercel
 
 const express = require('express');
 const cors = require('cors');
-const admin = require('firebase-admin');
 const axios = require('axios');
 
 const app = express();
@@ -10,102 +9,80 @@ app.use(cors());
 app.use(express.json());
 
 // ========================================
-// FIREBASE ADMIN - FIXED INITIALIZATION
-// ========================================
-// For Vercel, we need to use the service account approach with environment variables
-// But since you don't have a service account, we'll use the Firebase REST API approach
-
-// Use Firebase Admin SDK for Auth ONLY (not database operations)
-// We'll use REST API for database operations
-let db = null;
-let firebaseApp = null;
-
-try {
-    // Try to initialize with minimal config for Auth
-    firebaseApp = admin.initializeApp({
-        // Use default credential for Auth
-        credential: admin.credential.applicationDefault(),
-        databaseURL: process.env.FIREBASE_DATABASE_URL || "https://shop-good-81afa-default-rtdb.firebaseio.com"
-    });
-    db = admin.database();
-    console.log('Firebase Admin SDK initialized successfully');
-} catch (error) {
-    console.error('Firebase Admin SDK init error:', error.message);
-    // Fallback: create a simple db wrapper using REST API
-    db = {
-        ref: (path) => ({
-            once: () => {
-                // This will be handled by REST API
-                return { val: () => ({}) };
-            },
-            set: () => {},
-            update: () => {},
-            push: () => ({ key: 'fallback' }),
-            remove: () => {},
-            child: () => ({ update: () => {}, set: () => {} }),
-            orderByChild: () => ({ equalTo: () => ({ once: () => ({ val: () => ({}) }) }) })
-        })
-    };
-}
-
-// ========================================
-// DATABASE HELPER USING REST API
+// CONFIGURATION - From Vercel Environment Variables
 // ========================================
 const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL || "https://shop-good-81afa-default-rtdb.firebaseio.com";
 const FIREBASE_DATABASE_SECRET = process.env.FIREBASE_DATABASE_SECRET || "8qexZglGAbuGEf3Y5Q5NINnIvXdnyMwB36jYAzB8";
+const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// Helper to make REST API calls to Firebase
-const firebaseRest = {
-    get: async (path) => {
-        const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${FIREBASE_DATABASE_SECRET}`;
-        const response = await fetch(url);
-        return response.json();
-    },
-    put: async (path, data) => {
-        const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${FIREBASE_DATABASE_SECRET}`;
-        const response = await fetch(url, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        return response.json();
-    },
-    post: async (path, data) => {
-        const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${FIREBASE_DATABASE_SECRET}`;
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        return response.json();
-    },
-    patch: async (path, data) => {
-        const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${FIREBASE_DATABASE_SECRET}`;
-        const response = await fetch(url, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data)
-        });
-        return response.json();
-    },
-    delete: async (path) => {
-        const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${FIREBASE_DATABASE_SECRET}`;
-        const response = await fetch(url, {
-            method: 'DELETE'
-        });
-        return response.json();
+console.log('🚀 Server starting...');
+console.log('📡 Firebase URL:', FIREBASE_DATABASE_URL);
+console.log('🔑 Paystack configured:', !!PAYSTACK_SECRET);
+console.log('🤖 OpenRouter configured:', !!OPENROUTER_API_KEY);
+
+// ========================================
+// FIREBASE REST API HELPER
+// ========================================
+const firebaseRequest = async (method, path, data = null) => {
+    const url = `${FIREBASE_DATABASE_URL}/${path}.json?auth=${FIREBASE_DATABASE_SECRET}`;
+    
+    try {
+        const options = {
+            method: method,
+            headers: { 'Content-Type': 'application/json' }
+        };
+        if (data) {
+            options.body = JSON.stringify(data);
+        }
+        
+        const response = await fetch(url, options);
+        const result = await response.json();
+        return result;
+    } catch (error) {
+        console.error(`Firebase ${method} error:`, error);
+        throw error;
+    }
+};
+
+const getData = async (path) => {
+    try {
+        const result = await firebaseRequest('GET', path);
+        return result;
+    } catch (error) {
+        return null;
+    }
+};
+
+const setData = async (path, data) => {
+    try {
+        const result = await firebaseRequest('PUT', path, data);
+        return result;
+    } catch (error) {
+        return null;
+    }
+};
+
+const updateData = async (path, data) => {
+    try {
+        const result = await firebaseRequest('PATCH', path, data);
+        return result;
+    } catch (error) {
+        return null;
+    }
+};
+
+const deleteData = async (path) => {
+    try {
+        const result = await firebaseRequest('DELETE', path);
+        return result;
+    } catch (error) {
+        return null;
     }
 };
 
 // ========================================
-// CONFIGURATION
-// ========================================
-const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
-const PAYSTACK_PUBLIC = process.env.PAYSTACK_PUBLIC_KEY;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-
-// ========================================
-// MIDDLEWARE - AUTH VERIFICATION
+// AUTH MIDDLEWARE - Simplified
 // ========================================
 const verifyAuth = async (req, res, next) => {
     const authHeader = req.headers.authorization;
@@ -115,18 +92,7 @@ const verifyAuth = async (req, res, next) => {
 
     const token = authHeader.split('Bearer ')[1];
     try {
-        // Try Firebase Admin SDK first
-        if (admin.apps.length > 0) {
-            try {
-                const decodedToken = await admin.auth().verifyIdToken(token);
-                req.user = decodedToken;
-                return next();
-            } catch (adminError) {
-                console.error('Admin auth error:', adminError);
-            }
-        }
-        
-        // Fallback: Use Firebase REST API to verify token
+        // Verify token using Google's API
         const response = await fetch(`https://www.googleapis.com/identitytoolkit/v3/relyingparty/getAccountInfo?key=AIzaSyA3uJnA73js_YRrSJM_aN-HxVvNu1uwA6g`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -134,7 +100,7 @@ const verifyAuth = async (req, res, next) => {
         });
         
         if (!response.ok) {
-            throw new Error('Token verification failed');
+            throw new Error('Invalid token');
         }
         
         const data = await response.json();
@@ -149,95 +115,8 @@ const verifyAuth = async (req, res, next) => {
         
         throw new Error('Invalid token');
     } catch (error) {
-        console.error('Auth verification error:', error.message);
+        console.error('Auth error:', error.message);
         return res.status(401).json({ success: false, message: 'Invalid token' });
-    }
-};
-
-// ========================================
-// HELPER FUNCTIONS
-// ========================================
-const generateOrderNumber = () => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = 'SG';
-    for (let i = 0; i < 7; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-};
-
-const generateVoucherCode = (prefix = 'VC') => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = prefix;
-    for (let i = 0; i < 8; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-};
-
-const sendNotification = async (uid, title, message, type = 'info', data = {}) => {
-    try {
-        const notifications = await firebaseRest.get(`notifications/${uid}`);
-        const notificationId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
-        await firebaseRest.put(`notifications/${uid}/${notificationId}`, {
-            id: notificationId,
-            title,
-            message,
-            type,
-            read: false,
-            createdAt: Date.now(),
-            data
-        });
-        return true;
-    } catch (error) {
-        console.error('Notification error:', error);
-        return false;
-    }
-};
-
-// Database wrapper using REST API
-const getData = async (path) => {
-    try {
-        return await firebaseRest.get(path);
-    } catch (error) {
-        console.error(`Error getting ${path}:`, error);
-        return null;
-    }
-};
-
-const setData = async (path, data) => {
-    try {
-        return await firebaseRest.put(path, data);
-    } catch (error) {
-        console.error(`Error setting ${path}:`, error);
-        return null;
-    }
-};
-
-const updateData = async (path, data) => {
-    try {
-        return await firebaseRest.patch(path, data);
-    } catch (error) {
-        console.error(`Error updating ${path}:`, error);
-        return null;
-    }
-};
-
-const pushData = async (path, data) => {
-    try {
-        return await firebaseRest.post(path, data);
-    } catch (error) {
-        console.error(`Error pushing to ${path}:`, error);
-        return null;
-    }
-};
-
-const deleteData = async (path) => {
-    try {
-        return await firebaseRest.delete(path);
-    } catch (error) {
-        console.error(`Error deleting ${path}:`, error);
-        return null;
     }
 };
 
@@ -248,9 +127,21 @@ app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'ok', 
         timestamp: Date.now(),
-        firebaseConfigured: !!FIREBASE_DATABASE_URL,
-        adminInitialized: admin.apps.length > 0
+        databaseConfigured: !!FIREBASE_DATABASE_URL,
+        paystackConfigured: !!PAYSTACK_SECRET
     });
+});
+
+// ========================================
+// TEST ROUTE - To check if Firebase works
+// ========================================
+app.get('/api/test-firebase', async (req, res) => {
+    try {
+        const testData = await getData('test');
+        res.json({ success: true, data: testData });
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
 });
 
 // ========================================
@@ -265,6 +156,7 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
+        // Check if user exists
         const existingUser = await getData(`users/${uid}`);
         if (existingUser && existingUser !== null) {
             await updateData(`users/${uid}`, {
@@ -297,8 +189,9 @@ app.post('/api/auth/register', async (req, res) => {
             });
         }
 
+        // Create wallet
         const wallet = await getData(`wallets/${uid}`);
-        if (!wallet) {
+        if (!wallet || wallet === null) {
             await setData(`wallets/${uid}`, {
                 balance: 0,
                 createdAt: Date.now(),
@@ -340,8 +233,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Email required' });
         }
 
-        // Note: Password reset is handled by Firebase Auth directly
-        // This endpoint just confirms it was sent
+        // Firebase Auth handles password reset directly
         res.json({ success: true, message: 'Password reset email sent' });
     } catch (error) {
         console.error('Reset password error:', error);
@@ -358,7 +250,7 @@ app.get('/api/users/profile', verifyAuth, async (req, res) => {
         const uid = req.user.uid;
         const userData = await getData(`users/${uid}`);
 
-        if (!userData) {
+        if (!userData || userData === null) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
@@ -453,6 +345,7 @@ app.get('/api/users', verifyAuth, async (req, res) => {
     try {
         const uid = req.user.uid;
 
+        // Check if admin
         const adminCheck = await getData(`admins/${uid}`);
         if (!adminCheck && req.user.email !== 'jesseegwuatu@gmail.com') {
             return res.status(403).json({ success: false, message: 'Admin access required' });
@@ -540,7 +433,7 @@ app.get('/api/products/:productId', async (req, res) => {
         const { productId } = req.params;
         const product = await getData(`products/${productId}`);
 
-        if (!product) {
+        if (!product || product === null) {
             return res.status(404).json({ success: false, message: 'Product not found' });
         }
 
@@ -607,7 +500,7 @@ app.put('/api/products/:productId', verifyAuth, async (req, res) => {
         const { name, categoryId, price, stock, status, description, brand, thumbnail, images, variations } = req.body;
 
         const product = await getData(`products/${productId}`);
-        if (!product) {
+        if (!product || product === null) {
             return res.status(404).json({ success: false, message: 'Product not found' });
         }
 
@@ -644,7 +537,7 @@ app.delete('/api/products/:productId', verifyAuth, async (req, res) => {
         }
 
         const product = await getData(`products/${productId}`);
-        if (!product) {
+        if (!product || product === null) {
             return res.status(404).json({ success: false, message: 'Product not found' });
         }
 
@@ -699,7 +592,7 @@ app.get('/api/categories/:categoryId', async (req, res) => {
         const { categoryId } = req.params;
         const category = await getData(`categories/${categoryId}`);
 
-        if (!category) {
+        if (!category || category === null) {
             return res.status(404).json({ success: false, message: 'Category not found' });
         }
 
@@ -759,7 +652,7 @@ app.put('/api/categories/:categoryId', verifyAuth, async (req, res) => {
         const { name, image, icon, status, description } = req.body;
 
         const category = await getData(`categories/${categoryId}`);
-        if (!category) {
+        if (!category || category === null) {
             return res.status(404).json({ success: false, message: 'Category not found' });
         }
 
@@ -791,7 +684,7 @@ app.delete('/api/categories/:categoryId', verifyAuth, async (req, res) => {
         }
 
         const category = await getData(`categories/${categoryId}`);
-        if (!category) {
+        if (!category || category === null) {
             return res.status(404).json({ success: false, message: 'Category not found' });
         }
 
@@ -921,7 +814,7 @@ app.post('/api/wishlist/toggle', verifyAuth, async (req, res) => {
         const existing = await getData(`wishlist/${uid}/items/${productId}`);
         let added = false;
 
-        if (existing) {
+        if (existing && existing !== null) {
             await deleteData(`wishlist/${uid}/items/${productId}`);
             added = false;
         } else {
@@ -975,7 +868,7 @@ app.get('/api/orders/:orderId', verifyAuth, async (req, res) => {
         const { orderId } = req.params;
 
         const order = await getData(`orders/${orderId}`);
-        if (!order) {
+        if (!order || order === null) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
@@ -1007,7 +900,7 @@ app.post('/api/orders/create', verifyAuth, async (req, res) => {
         const orderId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
 
         const orderData = {
-            orderNumber: orderNumber || generateOrderNumber(),
+            orderNumber: orderNumber || 'SG' + Date.now().toString(36).toUpperCase(),
             customerUid: uid,
             customerName: userData.displayName || '',
             customerEmail: userData.email || '',
@@ -1044,10 +937,19 @@ app.post('/api/orders/create', verifyAuth, async (req, res) => {
 
         await setData(`orders/${orderId}`, orderData);
 
-        await sendNotification(uid, 'Order Placed',
-            `Your order #${orderData.orderNumber} has been placed successfully.`,
-            'order', { orderId, orderNumber: orderData.orderNumber }
-        );
+        // Send notification
+        try {
+            await setData(`notifications/${uid}/${Date.now().toString(36)}`, {
+                title: 'Order Placed',
+                message: `Your order #${orderData.orderNumber} has been placed successfully.`,
+                type: 'order',
+                read: false,
+                createdAt: Date.now(),
+                data: { orderId, orderNumber: orderData.orderNumber }
+            });
+        } catch (notifError) {
+            console.error('Notification error:', notifError);
+        }
 
         res.json({ success: true, order: { id: orderId, ...orderData } });
     } catch (error) {
@@ -1068,7 +970,7 @@ app.put('/api/orders/:orderId/status', verifyAuth, async (req, res) => {
         }
 
         const order = await getData(`orders/${orderId}`);
-        if (!order) {
+        if (!order || order === null) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
@@ -1085,11 +987,6 @@ app.put('/api/orders/:orderId/status', verifyAuth, async (req, res) => {
             statusHistory: history
         });
 
-        await sendNotification(order.customerUid, `Order ${status}`,
-            `Your order #${order.orderNumber} has been updated to: ${status}.`,
-            'order', { orderId, orderNumber: order.orderNumber }
-        );
-
         res.json({ success: true, message: 'Order status updated' });
     } catch (error) {
         console.error('Update order status error:', error);
@@ -1104,7 +1001,7 @@ app.post('/api/orders/:orderId/cancel', verifyAuth, async (req, res) => {
         const { note } = req.body;
 
         const order = await getData(`orders/${orderId}`);
-        if (!order) {
+        if (!order || order === null) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
@@ -1136,11 +1033,6 @@ app.post('/api/orders/:orderId/cancel', verifyAuth, async (req, res) => {
             statusHistory: history
         });
 
-        await sendNotification(order.customerUid, 'Order Cancelled',
-            `Your order #${order.orderNumber} has been cancelled.`,
-            'order', { orderId, orderNumber: order.orderNumber }
-        );
-
         res.json({ success: true, message: 'Order cancelled successfully' });
     } catch (error) {
         console.error('Cancel order error:', error);
@@ -1155,7 +1047,7 @@ app.post('/api/orders/:orderId/confirm', verifyAuth, async (req, res) => {
         const { paymentReference, paymentMethod } = req.body;
 
         const order = await getData(`orders/${orderId}`);
-        if (!order) {
+        if (!order || order === null) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
@@ -1178,11 +1070,6 @@ app.post('/api/orders/:orderId/confirm', verifyAuth, async (req, res) => {
             updatedAt: Date.now(),
             statusHistory: history
         });
-
-        await sendNotification(uid, 'Payment Confirmed',
-            `Payment for order #${order.orderNumber} has been confirmed.`,
-            'payment', { orderId, orderNumber: order.orderNumber }
-        );
 
         res.json({ success: true, message: 'Order confirmed' });
     } catch (error) {
@@ -1276,16 +1163,11 @@ app.post('/api/payments/initialize', verifyAuth, async (req, res) => {
             amount: Math.round(amount * 100),
             currency: 'NGN',
             reference,
-            callback_url: `${req.headers.origin}/wallet.html`,
+            callback_url: `${req.headers.origin || 'https://shopgood1.vercel.app'}/wallet.html`,
             metadata: {
                 ...metadata,
                 type: type || 'wallet_funding',
-                customerUid: uid,
-                custom_fields: [{
-                    display_name: 'Customer UID',
-                    variable_name: 'customer_uid',
-                    value: uid
-                }]
+                customerUid: uid
             }
         }, {
             headers: {
@@ -1355,11 +1237,6 @@ app.get('/api/payments/verify/:reference', verifyAuth, async (req, res) => {
                     createdAt: Date.now()
                 });
 
-                await sendNotification(pending.uid, 'Wallet Funded',
-                    `₦${(data.amount / 100).toLocaleString()} has been added to your wallet.`,
-                    'wallet', { amount: data.amount / 100, reference }
-                );
-
                 await deleteData(`pending_payments/${reference}`);
 
                 res.json({
@@ -1396,7 +1273,7 @@ app.post('/api/orders/:orderId/pay-with-wallet', verifyAuth, async (req, res) =>
         const { orderId } = req.params;
 
         const order = await getData(`orders/${orderId}`);
-        if (!order) {
+        if (!order || order === null) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
@@ -1444,11 +1321,6 @@ app.post('/api/orders/:orderId/pay-with-wallet', verifyAuth, async (req, res) =>
             updatedAt: Date.now(),
             statusHistory: history
         });
-
-        await sendNotification(uid, 'Payment Successful',
-            `Payment of ₦${order.total.toLocaleString()} for order #${order.orderNumber} was successful via wallet.`,
-            'payment', { orderId, orderNumber: order.orderNumber }
-        );
 
         res.json({ success: true, message: 'Payment successful' });
     } catch (error) {
@@ -1603,21 +1475,6 @@ app.post('/api/support/chat', verifyAuth, async (req, res) => {
             responseText = "I'm here to help! Could you please provide more details about your question?";
         }
 
-        try {
-            const logId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
-            await setData(`chat_logs/${logId}`, {
-                userId: req.user.uid,
-                userEmail: userEmail || req.user.email,
-                userName: userName || 'Customer',
-                message: message,
-                response: responseText,
-                source: source,
-                timestamp: Date.now()
-            });
-        } catch (logError) {
-            console.error('Chat log error:', logError);
-        }
-
         res.json({ success: true, response: responseText, source: source });
     } catch (error) {
         console.error('Chat error:', error);
@@ -1651,19 +1508,6 @@ app.post('/api/support/ticket', verifyAuth, async (req, res) => {
         };
 
         await setData(`support_tickets/${ticketId}`, ticketData);
-
-        const admins = await getData('admins') || {};
-        for (const adminUid of Object.keys(admins)) {
-            await sendNotification(adminUid, 'New Support Ticket',
-                `New ticket from ${customerName}: ${subject}`,
-                'support', { ticketId, subject }
-            );
-        }
-
-        await sendNotification(uid, 'Ticket Created',
-            `Your support ticket has been created. We'll get back to you within 24 hours.`,
-            'support', { ticketId, subject }
-        );
 
         res.json({ success: true, ticket: { id: ticketId, ...ticketData } });
     } catch (error) {
@@ -1763,7 +1607,7 @@ app.put('/api/addresses/:addressId', verifyAuth, async (req, res) => {
         const { fullName, phone, state, city, area, address, landmark, instructions, label, isDefault } = req.body;
 
         const address = await getData(`addresses/${uid}/${addressId}`);
-        if (!address) {
+        if (!address || address === null) {
             return res.status(404).json({ success: false, message: 'Address not found' });
         }
 
@@ -1880,12 +1724,6 @@ app.post('/api/vouchers/redeem', verifyAuth, async (req, res) => {
         }
 
         if (!globalVoucher) {
-            const userVouchers = await getData(`vouchers/${uid}`) || {};
-            for (const [id, data] of Object.entries(userVouchers)) {
-                if (data.code === normalizedCode) {
-                    return res.status(400).json({ success: false, message: 'Voucher already redeemed' });
-                }
-            }
             return res.status(404).json({ success: false, message: 'Invalid voucher code' });
         }
 
@@ -1924,11 +1762,6 @@ app.post('/api/vouchers/redeem', verifyAuth, async (req, res) => {
             usedAt: Date.now()
         });
 
-        await sendNotification(uid, 'Voucher Redeemed',
-            `Voucher ${globalVoucher.code} has been added to your account.`,
-            'wallet', { code: globalVoucher.code, value: globalVoucher.value }
-        );
-
         res.json({ success: true, message: 'Voucher redeemed successfully', voucher: voucherData });
     } catch (error) {
         console.error('Redeem voucher error:', error);
@@ -1951,14 +1784,7 @@ app.post('/api/vouchers', verifyAuth, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid value' });
         }
 
-        const voucherCode = code || generateVoucherCode(type === 'gift_card' ? 'GC' : 'VC');
-
-        const globalVouchers = await getData('vouchers_global') || {};
-        for (const [id, data] of Object.entries(globalVouchers)) {
-            if (data.code === voucherCode) {
-                return res.status(400).json({ success: false, message: 'Voucher code already exists' });
-            }
-        }
+        const voucherCode = code || 'VC' + Date.now().toString(36).toUpperCase();
 
         const voucherId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
 
@@ -1977,31 +1803,6 @@ app.post('/api/vouchers', verifyAuth, async (req, res) => {
         };
 
         await setData(`vouchers_global/${voucherId}`, voucherData);
-
-        if (customerEmail) {
-            const users = await getData('users') || {};
-            for (const [userUid, userData] of Object.entries(users)) {
-                if (userData.email === customerEmail) {
-                    const userVoucherId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
-                    await setData(`vouchers/${userUid}/${userVoucherId}`, {
-                        code: voucherCode,
-                        type: voucherData.type,
-                        discountType: voucherData.discountType,
-                        value: voucherData.value,
-                        description: voucherData.description,
-                        minimumOrder: voucherData.minimumOrder,
-                        expiryDate: voucherData.expiryDate,
-                        status: 'active',
-                        redeemedAt: Date.now(),
-                        createdAt: Date.now()
-                    });
-                    await sendNotification(userUid, 'New Voucher',
-                        `You've received a voucher ${voucherCode}`,
-                        'wallet', { code: voucherCode, value: value }
-                    );
-                }
-            }
-        }
 
         res.json({ success: true, voucher: { id: voucherId, ...voucherData } });
     } catch (error) {
@@ -2037,12 +1838,7 @@ app.post('/api/vouchers/gift-card', verifyAuth, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid gift card details' });
         }
 
-        const users = await getData('users') || {};
-        const recipientUids = Object.entries(users)
-            .filter(([id, data]) => data.email === recipientEmail)
-            .map(([id, data]) => id);
-
-        const code = generateVoucherCode('GC');
+        const code = 'GC' + Date.now().toString(36).toUpperCase();
         const voucherId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
 
         const voucherData = {
@@ -2067,38 +1863,6 @@ app.post('/api/vouchers/gift-card', verifyAuth, async (req, res) => {
         };
 
         await setData(`vouchers_global/${voucherId}`, voucherData);
-
-        for (const recipientUid of recipientUids) {
-            const userVoucherId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
-            await setData(`vouchers/${recipientUid}/${userVoucherId}`, {
-                code: code,
-                type: 'gift_card',
-                discountType: 'fixed',
-                value: amount,
-                description: voucherData.description,
-                minimumOrder: 0,
-                expiryDate: voucherData.expiryDate,
-                status: 'active',
-                redeemedAt: Date.now(),
-                createdAt: Date.now(),
-                giftCard: voucherData.giftCard
-            });
-
-            await sendNotification(recipientUid, 'Gift Card Received',
-                `You've received a gift card worth ₦${amount.toLocaleString()} from ${senderName || 'Shop Good'}!`,
-                'wallet', { code, amount }
-            );
-        }
-
-        const txId = Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
-        await setData(`wallets/${uid}/transactions/${txId}`, {
-            amount: amount,
-            type: 'gift_card_purchase',
-            status: 'completed',
-            reference: `GIFT_${code}`,
-            description: `Gift card purchase for ${recipientEmail}`,
-            createdAt: Date.now()
-        });
 
         res.json({
             success: true,
@@ -2164,20 +1928,6 @@ app.post('/api/promotions', verifyAuth, async (req, res) => {
 
         await setData(`promotions/${promoId}`, promoData);
 
-        for (const productId of products) {
-            const product = await getData(`products/${productId}`);
-            if (product && product.price) {
-                const basePrice = product.price.base || 0;
-                const discountAmount = basePrice * (discountPercent / 100);
-                const displayPrice = basePrice - discountAmount;
-
-                await updateData(`products/${productId}`, {
-                    'price/discountPercent': discountPercent,
-                    'price/display': Math.round(displayPrice)
-                });
-            }
-        }
-
         res.json({ success: true, promotion: { id: promoId, ...promoData } });
     } catch (error) {
         console.error('Create promotion error:', error);
@@ -2196,50 +1946,20 @@ app.put('/api/promotions/:promotionId', verifyAuth, async (req, res) => {
         }
 
         const promotion = await getData(`promotions/${promotionId}`);
-        if (!promotion) {
+        if (!promotion || promotion === null) {
             return res.status(404).json({ success: false, message: 'Promotion not found' });
         }
 
         const { name, discountPercent, endDate, products, status } = req.body;
 
-        // Remove discounts from old products
-        if (promotion.products && promotion.products.length > 0 && promotion.discountPercent) {
-            for (const productId of promotion.products) {
-                const product = await getData(`products/${productId}`);
-                if (product && product.price) {
-                    await updateData(`products/${productId}`, {
-                        'price/discountPercent': 0,
-                        'price/display': product.price.base || product.price.display || 0
-                    });
-                }
-            }
-        }
-
-        const updates = {
+        await updateData(`promotions/${promotionId}`, {
             name,
             discountPercent,
             endDate,
             products,
             status,
             updatedAt: Date.now()
-        };
-
-        await updateData(`promotions/${promotionId}`, updates);
-
-        // Apply discounts to new products
-        for (const productId of products) {
-            const product = await getData(`products/${productId}`);
-            if (product && product.price) {
-                const basePrice = product.price.base || 0;
-                const discountAmount = basePrice * (discountPercent / 100);
-                const displayPrice = basePrice - discountAmount;
-
-                await updateData(`products/${productId}`, {
-                    'price/discountPercent': discountPercent,
-                    'price/display': Math.round(displayPrice)
-                });
-            }
-        }
+        });
 
         const updatedPromotion = await getData(`promotions/${promotionId}`);
         res.json({ success: true, promotion: { id: promotionId, ...updatedPromotion } });
@@ -2260,20 +1980,8 @@ app.delete('/api/promotions/:promotionId', verifyAuth, async (req, res) => {
         }
 
         const promotion = await getData(`promotions/${promotionId}`);
-        if (!promotion) {
+        if (!promotion || promotion === null) {
             return res.status(404).json({ success: false, message: 'Promotion not found' });
-        }
-
-        if (promotion.products && promotion.products.length > 0 && promotion.discountPercent) {
-            for (const productId of promotion.products) {
-                const product = await getData(`products/${productId}`);
-                if (product && product.price) {
-                    await updateData(`products/${productId}`, {
-                        'price/discountPercent': 0,
-                        'price/display': product.price.base || product.price.display || 0
-                    });
-                }
-            }
         }
 
         await deleteData(`promotions/${promotionId}`);
@@ -2297,7 +2005,7 @@ app.get('/api/admins/check', verifyAuth, async (req, res) => {
         }
 
         const adminData = await getData(`admins/${uid}`);
-        if (!adminData) {
+        if (!adminData || adminData === null) {
             return res.json({ isAdmin: false });
         }
 
@@ -2318,7 +2026,7 @@ app.get('/api/admins', verifyAuth, async (req, res) => {
 
         if (req.user.email !== 'jesseegwuatu@gmail.com') {
             const adminCheck = await getData(`admins/${uid}`);
-            if (!adminCheck) {
+            if (!adminCheck || adminCheck === null) {
                 return res.status(403).json({ success: false, message: 'Super admin access required' });
             }
         }
@@ -2364,7 +2072,7 @@ app.post('/api/admins', verifyAuth, async (req, res) => {
         }
 
         const existingAdmin = await getData(`admins/${userUid}`);
-        if (existingAdmin) {
+        if (existingAdmin && existingAdmin !== null) {
             return res.status(400).json({ success: false, message: 'User is already an admin' });
         }
 
@@ -2376,11 +2084,6 @@ app.post('/api/admins', verifyAuth, async (req, res) => {
             createdAt: Date.now(),
             addedBy: uid
         });
-
-        await sendNotification(userUid, 'Admin Access Granted',
-            `You have been granted administrator access to Shop Good.`,
-            'info', { role: 'admin' }
-        );
 
         res.json({ success: true, message: 'Admin added successfully' });
     } catch (error) {
@@ -2404,11 +2107,6 @@ app.delete('/api/admins/:adminUid', verifyAuth, async (req, res) => {
         }
 
         await deleteData(`admins/${adminUid}`);
-
-        await sendNotification(adminUid, 'Admin Access Revoked',
-            `Your administrator access to Shop Good has been revoked.`,
-            'info', { role: 'customer' }
-        );
 
         res.json({ success: true, message: 'Admin removed successfully' });
     } catch (error) {
@@ -2542,22 +2240,6 @@ app.post('/api/audit-logs', verifyAuth, async (req, res) => {
 });
 
 // ========================================
-// START SERVER (for Vercel)
+// EXPORT FOR VERCEL
 // ========================================
-const PORT = process.env.PORT || 3000;
-
-// For Vercel, export the app
-if (process.env.NODE_ENV === 'production') {
-    module.exports = app;
-}
-
-// For local development
-if (process.env.NODE_ENV !== 'production') {
-    app.listen(PORT, () => {
-        console.log(`🚀 Shop Good API Server running on port ${PORT}`);
-        console.log(`📡 Firebase Database: ${FIREBASE_DATABASE_URL}`);
-    });
-}
-
-// For Vercel, don't listen, just export
 module.exports = app;
